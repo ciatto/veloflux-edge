@@ -39,10 +39,12 @@ type RouteRule struct {
 }
 
 type DynamicConfig struct {
-	DefaultUpstream *string             `json:"default_upstream,omitempty"`
-	HostUpstreams   map[string][]string `json:"host_upstreams,omitempty"`
-	Routes          []RouteRule         `json:"routes,omitempty"`
-	PreserveHost    *bool               `json:"preserve_host,omitempty"`
+	DefaultUpstream    *string             `json:"default_upstream,omitempty"`
+	HostUpstreams      map[string][]string `json:"host_upstreams,omitempty"`
+	Routes             []RouteRule         `json:"routes,omitempty"`
+	PreserveHost       *bool               `json:"preserve_host,omitempty"`
+	CustomDomainHeader *string             `json:"custom_domain_header,omitempty"`
+	UpstreamUserAgent  *string             `json:"upstream_user_agent,omitempty"`
 }
 
 type Snapshot struct {
@@ -396,7 +398,7 @@ func (e *edge) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	host := normalizeHost(r.Host)
-	cfg, ok := snap.ByHost[host]
+	cfg, ok := lookupHostConfig(snap.ByHost, host)
 	if !ok {
 		http.Error(w, "unknown host", http.StatusMisdirectedRequest)
 		return
@@ -435,9 +437,7 @@ func (e *edge) serveTarget(w http.ResponseWriter, r *http.Request, target *url.U
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Transport = e.transport
 	proxy.FlushInterval = -1
-	proxy.ErrorHandler = func(_ http.ResponseWriter, _ *http.Request, err error) {
-		// The outer handler retries another target. Do not write here.
-	}
+
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
@@ -449,21 +449,66 @@ func (e *edge) serveTarget(w http.ResponseWriter, r *http.Request, target *url.U
 		if id := e.currentNodeID(); id != "" {
 			req.Header.Set("X-VeloFlux-Edge-ID", id)
 		}
+		if cfg.UpstreamUserAgent != nil && strings.TrimSpace(*cfg.UpstreamUserAgent) != "" {
+			req.Header.Set("User-Agent", strings.TrimSpace(*cfg.UpstreamUserAgent))
+		}
+		if cfg.CustomDomainHeader != nil && strings.TrimSpace(*cfg.CustomDomainHeader) != "" {
+			req.Header.Set(strings.TrimSpace(*cfg.CustomDomainHeader), normalizeHost(r.Host))
+		}
 	}
 
-	rec := &captureWriter{header: make(http.Header)}
-	proxy.ServeHTTP(rec, r)
-	if rec.err != nil {
-		return rec.err
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		resp.Header.Set("X-VeloFlux-Edge", e.cfg.NodeName)
+		if id := e.currentNodeID(); id != "" {
+			resp.Header.Set("X-VeloFlux-Edge-ID", id)
+		}
+		return nil
 	}
-	copyHeader(w.Header(), rec.header)
-	w.Header().Set("X-VeloFlux-Edge", e.cfg.NodeName)
-	if id := e.currentNodeID(); id != "" {
-		w.Header().Set("X-VeloFlux-Edge-ID", id)
+
+	var proxyErr error
+	proxy.ErrorHandler = func(_ http.ResponseWriter, _ *http.Request, err error) {
+		proxyErr = err
 	}
-	w.WriteHeader(rec.status)
-	_, _ = w.Write(rec.body.Bytes())
-	return nil
+	proxy.ServeHTTP(w, r)
+	return proxyErr
+}
+
+func lookupHostConfig(configs map[string]DynamicConfig, host string) (DynamicConfig, bool) {
+	host = normalizeHost(host)
+	if host == "" {
+		return DynamicConfig{}, false
+	}
+	if cfg, ok := configs[host]; ok {
+		return cfg, true
+	}
+
+	bestLen := -1
+	var best DynamicConfig
+	found := false
+	for rawPattern, cfg := range configs {
+		pattern := normalizeHost(rawPattern)
+		if pattern == "*" {
+			if !found {
+				best, bestLen, found = cfg, 0, true
+			}
+			continue
+		}
+		if !strings.HasPrefix(pattern, "*.") {
+			continue
+		}
+		suffix := pattern[1:] // includes leading dot
+		if !strings.HasSuffix(host, suffix) {
+			continue
+		}
+		label := strings.TrimSuffix(host, suffix)
+		if label == "" || strings.Contains(label, ".") {
+			continue
+		}
+		if len(pattern) > bestLen {
+			best, bestLen, found = cfg, len(pattern), true
+		}
+	}
+	return best, found
 }
 
 type captureWriter struct {
@@ -525,7 +570,7 @@ func selectTargets(cfg DynamicConfig, host, path string) ([]string, string) {
 
 func pathMatches(pattern, path string) bool {
 	pattern = strings.TrimSpace(pattern)
-	if pattern == "" || pattern == "/" || pattern == "/*" {
+	if pattern == "" || pattern == "/" || pattern == "*" || pattern == "/*" {
 		return true
 	}
 	if strings.HasSuffix(pattern, "/*") {
