@@ -17,6 +17,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -69,12 +70,13 @@ type identityResponse struct {
 }
 
 type edge struct {
-	cfg       Config
-	nodeID    atomic.Value
-	snapshot  atomic.Value
-	rrCounter atomic.Uint64
-	client    *http.Client
-	transport *http.Transport
+	cfg         Config
+	bootstrapMu sync.Mutex
+	nodeID      atomic.Value
+	snapshot    atomic.Value
+	rrCounter   atomic.Uint64
+	client      *http.Client
+	transport   *http.Transport
 }
 
 func main() {
@@ -185,6 +187,9 @@ func newEdge(cfg Config) *edge {
 }
 
 func (e *edge) bootstrap(ctx context.Context) error {
+	e.bootstrapMu.Lock()
+	defer e.bootstrapMu.Unlock()
+
 	if e.currentNodeID() == "" {
 		if err := e.reattach(ctx); err != nil {
 			if !errors.Is(err, errNodeNotFound) {
@@ -362,8 +367,14 @@ func (e *edge) doJSON(ctx context.Context, method, path, token string, body []by
 	return e.client.Do(req)
 }
 
-func (e *edge) ready(w http.ResponseWriter, _ *http.Request) {
+func (e *edge) ready(w http.ResponseWriter, r *http.Request) {
 	snap := e.currentSnapshot()
+	if e.currentNodeID() == "" || len(snap.ByHost) == 0 {
+		if err := e.bootstrap(r.Context()); err != nil {
+			log.Printf("request-time bootstrap failed: %v", err)
+		}
+		snap = e.currentSnapshot()
+	}
 	if e.currentNodeID() == "" || len(snap.ByHost) == 0 {
 		http.Error(w, "not-ready", http.StatusServiceUnavailable)
 		return
@@ -374,8 +385,17 @@ func (e *edge) ready(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (e *edge) proxy(w http.ResponseWriter, r *http.Request) {
-	host := normalizeHost(r.Host)
 	snap := e.currentSnapshot()
+	if e.currentNodeID() == "" || len(snap.ByHost) == 0 {
+		if err := e.bootstrap(r.Context()); err != nil {
+			log.Printf("request-time bootstrap failed: %v", err)
+			http.Error(w, "edge not ready", http.StatusServiceUnavailable)
+			return
+		}
+		snap = e.currentSnapshot()
+	}
+
+	host := normalizeHost(r.Host)
 	cfg, ok := snap.ByHost[host]
 	if !ok {
 		http.Error(w, "unknown host", http.StatusMisdirectedRequest)
