@@ -3,6 +3,8 @@ FROM golang:1.24-alpine AS builder
 WORKDIR /src
 COPY go.mod ./
 COPY main.go ./
+COPY main_test.go ./
+RUN go test ./... -count=1
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/veloflux-edge .
 
 FROM alpine:3.20
