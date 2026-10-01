@@ -37,6 +37,8 @@ For first enrollment also provide:
 
 `EDGE_NODE_ID` is optional. After registration, stateless runtimes can recover the node ID by securely reattaching with the stable node token.
 
+After the first successful registration, `EDGE_TOKEN` is no longer required for normal cold starts or redeploys. Remove or rotate the one-time enrollment token after confirming `/readyz` is healthy.
+
 ## Security
 
 The runtime fails closed for unknown hosts and accepts routing only from the authenticated VeloFlux Control Plane. No database, billing or admin credentials belong in this repository or deployment.
