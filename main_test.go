@@ -106,3 +106,71 @@ func strptr(v string) *string { return &v }
 func parseURL(raw string) (*url.URL, error) {
 	return url.Parse(raw)
 }
+
+
+func TestApplyVercelCDNPolicyPreservesBrowserNoStore(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "https://demo.sendbot.chat/?utm_source=test", nil)
+	req.Host = "demo.sendbot.chat"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Cache-Control":                  []string{"no-store"},
+			"Cloudflare-CDN-Cache-Control":  []string{"public, max-age=10, stale-while-revalidate=300, stale-if-error=86400"},
+		},
+	}
+
+	applyVercelCDNPolicy(resp, req)
+
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("browser cache-control changed: %q", got)
+	}
+	want := "public, max-age=10, stale-while-revalidate=300, stale-if-error=86400"
+	if got := resp.Header.Get("Vercel-CDN-Cache-Control"); got != want {
+		t.Fatalf("vercel cache policy=%q want=%q", got, want)
+	}
+	if got := resp.Header.Get("Vercel-Cache-Tag"); got != "sendbot-viewer-demo-sendbot-chat" {
+		t.Fatalf("cache tag=%q", got)
+	}
+}
+
+func TestApplyVercelCDNPolicyRejectsPrivateAndSetCookie(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy string
+		cookie bool
+	}{
+		{name: "private", policy: "private, max-age=60"},
+		{name: "no-store", policy: "public, no-store, max-age=60"},
+		{name: "set-cookie", policy: "public, max-age=60", cookie: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://demo.sendbot.chat/", nil)
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Cloudflare-CDN-Cache-Control": []string{tc.policy}},
+			}
+			if tc.cookie {
+				resp.Header.Add("Set-Cookie", "session=secret")
+			}
+			applyVercelCDNPolicy(resp, req)
+			if got := resp.Header.Get("Vercel-CDN-Cache-Control"); got != "" {
+				t.Fatalf("unexpected Vercel cache policy %q", got)
+			}
+		})
+	}
+}
+
+func TestApplyVercelCDNPolicyKeepsExplicitVercelPolicy(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "https://demo.sendbot.chat/", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Vercel-CDN-Cache-Control":     []string{"public, max-age=120"},
+			"Cloudflare-CDN-Cache-Control": []string{"public, max-age=10"},
+		},
+	}
+	applyVercelCDNPolicy(resp, req)
+	if got := resp.Header.Get("Vercel-CDN-Cache-Control"); got != "public, max-age=120" {
+		t.Fatalf("explicit Vercel policy overwritten: %q", got)
+	}
+}

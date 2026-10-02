@@ -462,6 +462,7 @@ func (e *edge) serveTarget(w http.ResponseWriter, r *http.Request, target *url.U
 		if id := e.currentNodeID(); id != "" {
 			resp.Header.Set("X-VeloFlux-Edge-ID", id)
 		}
+		applyVercelCDNPolicy(resp, r)
 		return nil
 	}
 
@@ -471,6 +472,67 @@ func (e *edge) serveTarget(w http.ResponseWriter, r *http.Request, target *url.U
 	}
 	proxy.ServeHTTP(w, r)
 	return proxyErr
+}
+
+func applyVercelCDNPolicy(resp *http.Response, req *http.Request) {
+	if resp == nil || req == nil {
+		return
+	}
+	if req.Method != http.MethodGet && req.Method != http.MethodHead {
+		return
+	}
+	if resp.StatusCode != http.StatusOK || len(resp.Header.Values("Set-Cookie")) > 0 {
+		return
+	}
+	if strings.TrimSpace(resp.Header.Get("Vercel-CDN-Cache-Control")) != "" {
+		return
+	}
+
+	policy := strings.TrimSpace(resp.Header.Get("VeloFlux-CDN-Cache-Control"))
+	if policy == "" {
+		policy = strings.TrimSpace(resp.Header.Get("Cloudflare-CDN-Cache-Control"))
+	}
+	if policy == "" {
+		policy = strings.TrimSpace(resp.Header.Get("CDN-Cache-Control"))
+	}
+	if !cachePolicyPublic(policy) {
+		return
+	}
+
+	resp.Header.Set("Vercel-CDN-Cache-Control", policy)
+	if host := normalizeHost(req.Host); host != "" {
+		resp.Header.Set("Vercel-Cache-Tag", "sendbot-viewer-"+sanitizeCacheTag(host))
+	}
+}
+
+func cachePolicyPublic(policy string) bool {
+	if strings.TrimSpace(policy) == "" {
+		return false
+	}
+	public := false
+	for _, raw := range strings.Split(policy, ",") {
+		directive := strings.ToLower(strings.TrimSpace(strings.SplitN(raw, "=", 2)[0]))
+		switch directive {
+		case "private", "no-store":
+			return false
+		case "public":
+			public = true
+		}
+	}
+	return public
+}
+
+func sanitizeCacheTag(host string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(host)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func lookupHostConfig(configs map[string]DynamicConfig, host string) (DynamicConfig, bool) {
