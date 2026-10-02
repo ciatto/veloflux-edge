@@ -1,0 +1,81 @@
+# VeloFlux Fastly Compute runtime.
+# Production secrets are linked through Fastly Secret Store; never commit them.
+manifest_version = 3
+name = "veloflux-fastly-edge"
+description = "VeloFlux managed Edge runtime for Fastly Compute"
+authors = ["elton@ciatto.com.br"]
+language = "go"
+service_id = "IrskChniIhUZq3A30S0rJ5"
+
+[scripts]
+build = "mkdir -p bin && GOOS=wasip1 GOARCH=wasm go build -trimpath -ldflags='-s -w' -o bin/main.wasm ./cmd/fastly"
+
+[setup]
+
+  [setup.backends]
+
+    [setup.backends.veloflux_control_plane]
+    address = "api.veloflux.io"
+    port = 443
+    description = "VeloFlux authenticated edge control plane"
+
+  [setup.config_stores]
+
+    [setup.config_stores.veloflux_config]
+    description = "Non-secret VeloFlux Fastly edge configuration"
+
+      [setup.config_stores.veloflux_config.items]
+
+        [setup.config_stores.veloflux_config.items.control_plane_url]
+        value = "https://api.veloflux.io"
+        description = "VeloFlux control-plane base URL"
+
+        [setup.config_stores.veloflux_config.items.edge_cluster]
+        value = "clients-pro"
+        description = "VeloFlux cluster joined by the Fastly managed edge"
+
+        [setup.config_stores.veloflux_config.items.edge_node_name]
+        value = "fastly-edge-primary"
+        description = "Stable logical VeloFlux node name"
+
+  [setup.secret_stores]
+
+    [setup.secret_stores.veloflux_secrets]
+    description = "VeloFlux data-plane credentials for this Fastly edge"
+
+      [setup.secret_stores.veloflux_secrets.entries]
+
+        [setup.secret_stores.veloflux_secrets.entries.edge_node_token]
+        description = "Stable random data-plane secret unique to this logical edge"
+
+        [setup.secret_stores.veloflux_secrets.entries.edge_token]
+        description = "One-time VeloFlux enrollment credential"
+
+[local_server]
+
+  [local_server.backends]
+
+    [local_server.backends.veloflux_control_plane]
+    url = "https://api.veloflux.io"
+    override_host = "api.veloflux.io"
+    cert_host = "api.veloflux.io"
+
+  [local_server.config_stores]
+
+    [local_server.config_stores.veloflux_config]
+    format = "inline-toml"
+
+      [local_server.config_stores.veloflux_config.contents]
+      control_plane_url = "https://api.veloflux.io"
+      edge_cluster = "clients-pro"
+      edge_node_name = "fastly-edge-primary"
+
+  [local_server.secret_stores]
+
+    [[local_server.secret_stores.veloflux_secrets]]
+    key = "edge_node_token"
+    data = "local-development-only-change-me"
+
+    [[local_server.secret_stores.veloflux_secrets]]
+    key = "edge_token"
+    data = "local-development-only-change-me"
