@@ -82,6 +82,25 @@ type edge struct {
 }
 
 func main() {
+	if strings.TrimSpace(os.Getenv("VERCEL_ENV")) == "preview" {
+		port := strings.TrimSpace(os.Getenv("PORT"))
+		if port == "" {
+			port = "8080"
+		}
+		mux := http.NewServeMux()
+		mux.HandleFunc("/__veloflux/vercel-api-authz", vercelAPIAuthzProbe)
+		server := &http.Server{
+			Addr:              ":" + port,
+			Handler:           mux,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		log.Printf("VeloFlux Vercel OIDC preview probe listening on :%s", port)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatal(err)
