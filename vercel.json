@@ -1,4 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "fluid": true
+  "fluid": true,
+  "alias": [
+    "seculos-v3.sendbot.chat"
+  ]
 }
