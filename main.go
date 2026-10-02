@@ -103,6 +103,7 @@ func main() {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/readyz", e.ready)
+	mux.HandleFunc("/__veloflux/vercel-api-authz", vercelAPIAuthzProbe)
 	mux.HandleFunc("/", e.proxy)
 
 	server := &http.Server{
@@ -117,6 +118,54 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+func vercelAPIAuthzProbe(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(os.Getenv("VERCEL_ENV")) != "preview" {
+		http.NotFound(w, r)
+		return
+	}
+	token := strings.TrimSpace(os.Getenv("VERCEL_OIDC_TOKEN"))
+	if token == "" {
+		http.Error(w, "oidc token unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	const teamID = "team_gzSri4uwXAyphdWnL9LMxtdA"
+	const projectID = "prj_lShBMMLmFVY0pHW0bPnNWTNAykI5"
+	client := &http.Client{Timeout: 8 * time.Second}
+
+	call := func(method, endpoint string, body io.Reader) int {
+		req, err := http.NewRequestWithContext(r.Context(), method, endpoint, body)
+		if err != nil {
+			return 0
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/json")
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return resp.StatusCode
+	}
+
+	getStatus := call(http.MethodGet,
+		"https://api.vercel.com/v9/projects/"+projectID+"/domains?limit=1&teamId="+teamID, nil)
+	postStatus := call(http.MethodPost,
+		"https://api.vercel.com/v10/projects/"+projectID+"/domains?teamId="+teamID,
+		strings.NewReader(`{"name":"invalid"}`))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"oidc_present": true,
+		"get_domains_status": getStatus,
+		"invalid_add_domain_status": postStatus,
+	})
 }
 
 func loadConfig() (Config, error) {
