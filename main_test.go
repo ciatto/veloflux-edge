@@ -4,16 +4,16 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
-	"net/url"
 )
 
 func TestLookupHostConfigExactWinsOverWildcard(t *testing.T) {
 	exact := DynamicConfig{DefaultUpstream: strptr("https://exact.example")}
 	wild := DynamicConfig{DefaultUpstream: strptr("https://wild.example")}
 	configs := map[string]DynamicConfig{
-		"*.sendbot.chat": wild,
+		"*.sendbot.chat":   wild,
 		"bot.sendbot.chat": exact,
 	}
 
@@ -52,9 +52,9 @@ func TestManagedHeadersReachUpstream(t *testing.T) {
 	custom := "custom_domain"
 	ua := "Mozilla/5.0 (compatible; SendbotShield/1.0)"
 	cfg := DynamicConfig{
-		Routes: []RouteRule{{Path: "/*", Upstreams: []string{upstream.URL}, Strategy: "failover"}},
+		Routes:             []RouteRule{{Path: "/*", Upstreams: []string{upstream.URL}, Strategy: "failover"}},
 		CustomDomainHeader: &custom,
-		UpstreamUserAgent: &ua,
+		UpstreamUserAgent:  &ua,
 	}
 
 	e := newEdge(Config{NodeName: "vercel-edge-primary"})
@@ -107,15 +107,14 @@ func parseURL(raw string) (*url.URL, error) {
 	return url.Parse(raw)
 }
 
-
 func TestApplyVercelCDNPolicyPreservesBrowserNoStore(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "https://demo.sendbot.chat/?utm_source=test", nil)
 	req.Host = "demo.sendbot.chat"
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header: http.Header{
-			"Cache-Control":                  []string{"no-store"},
-			"Cloudflare-CDN-Cache-Control":  []string{"public, max-age=10, stale-while-revalidate=300, stale-if-error=86400"},
+			"Cache-Control":                []string{"no-store"},
+			"Cloudflare-Cdn-Cache-Control": []string{"public, max-age=10, stale-while-revalidate=300, stale-if-error=86400"},
 		},
 	}
 
@@ -147,7 +146,7 @@ func TestApplyVercelCDNPolicyRejectsPrivateAndSetCookie(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://demo.sendbot.chat/", nil)
 			resp := &http.Response{
 				StatusCode: http.StatusOK,
-				Header:     http.Header{"Cloudflare-CDN-Cache-Control": []string{tc.policy}},
+				Header:     http.Header{"Cloudflare-Cdn-Cache-Control": []string{tc.policy}},
 			}
 			if tc.cookie {
 				resp.Header.Add("Set-Cookie", "session=secret")
@@ -165,8 +164,8 @@ func TestApplyVercelCDNPolicyKeepsExplicitVercelPolicy(t *testing.T) {
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header: http.Header{
-			"Vercel-CDN-Cache-Control":     []string{"public, max-age=120"},
-			"Cloudflare-CDN-Cache-Control": []string{"public, max-age=10"},
+			"Vercel-Cdn-Cache-Control":     []string{"public, max-age=120"},
+			"Cloudflare-Cdn-Cache-Control": []string{"public, max-age=10"},
 		},
 	}
 	applyVercelCDNPolicy(resp, req)

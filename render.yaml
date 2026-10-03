@@ -1,0 +1,30 @@
+# Isolated Render Free canary. This does not change production DNS or routes.
+previews:
+  generation: "off"
+services:
+  - type: web
+    name: veloflux-edge-render-free-20261003
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: "off"
+    healthCheckPath: /healthz
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: GOMAXPROCS
+        value: "1"
+      - key: GOMEMLIMIT
+        value: 384MiB
+      - key: CONTROL_PLANE_URL
+        value: https://api.veloflux.io
+      - key: EDGE_CLUSTER
+        sync: false
+      - key: EDGE_NODE_NAME
+        value: render-free-fra-20261003
+      - key: EDGE_NODE_TOKEN
+        generateValue: true
+      - key: EDGE_TOKEN
+        sync: false
